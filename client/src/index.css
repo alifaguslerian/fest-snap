@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+@theme {
+  /* Font heading dipakai di semua komponen (className="font-heading").
+     Sengaja pakai font sistem (bukan Google Fonts CDN) supaya tidak butuh
+     internet — sesuai prinsip offline-first (lihat software-architecture.md).
+     Georgia/Times mendukung italic+bold dengan baik di semua OS/browser. */
+  --font-heading: Georgia, "Times New Roman", serif;
+}
+
+body {
+  margin: 0;
+}

@@ -1,0 +1,19 @@
+node_modules/
+dist/
+certs/*.pem
+server/*.db
+server/*.db-wal
+server/*.db-shm
+
+# Foto hasil capture pengunjung — data runtime, bukan source code, dan
+# berisi foto asli orang (privasi). Jangan pernah ter-commit.
+server/src/storage/*
+!server/src/storage/.gitkeep
+
+# Untuk nanti (Slice 4 — kredensial cloud provider)
+.env
+.env.*
+
+*.log
+.DS_Store
+Thumbs.db
