@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { healthRouter } from "./routes/health.js";
 import { sessionsRouter } from "./routes/sessions.js";
+import { templatesRouter } from "./routes/templates.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -23,8 +24,13 @@ const KEY_PATH = path.join(CERT_DIR, "localhost+2-key.pem");
 const app = express();
 app.use(cors());
 app.use(express.json());
+// Sajikan foto (mentah + hasil akhir) dan asset template statis langsung
+// sebagai file — dipakai client untuk menampilkan <img> di halaman Editing.
+app.use("/storage", express.static(STORAGE_DIR));
+app.use("/templates", express.static(path.join(__dirname, "templates")));
 app.use("/api", healthRouter);
 app.use("/api", sessionsRouter);
+app.use("/api", templatesRouter);
 
 const PORT = 8443;
 
