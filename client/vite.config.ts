@@ -31,10 +31,21 @@ export default defineConfig({
       : undefined,
     host: true, // biar bisa diakses dari device lain di jaringan lokal (iPad, laptop lain)
     proxy: {
-      // Semua request /api diteruskan ke server Express di port 8443
+      // Semua request /api, /storage (foto), dan /templates (asset template)
+      // diteruskan ke server Express di port 8443
       "/api": {
         target: "https://localhost:8443",
         secure: false, // izinkan cert self-signed/mkcert saat proxy
+        changeOrigin: true,
+      },
+      "/storage": {
+        target: "https://localhost:8443",
+        secure: false,
+        changeOrigin: true,
+      },
+      "/templates": {
+        target: "https://localhost:8443",
+        secure: false,
         changeOrigin: true,
       },
     },
