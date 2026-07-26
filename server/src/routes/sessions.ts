@@ -191,6 +191,99 @@ sessionsRouter.delete("/sessions", (_req, res) => {
   res.status(204).send();
 });
 
+// GET /api/sessions/:id — detail satu sesi + daftar foto mentahnya
+// (dipakai halaman Editing untuk menampilkan foto & state tersimpan sebelumnya).
+sessionsRouter.get("/sessions/:id", (req, res) => {
+  const sessionId = req.params.id;
+
+  const session = db
+    .prepare(
+      `SELECT id, display_name, created_at, status, template_id, slot_assignments,
+              final_composite_path
+       FROM sessions WHERE id = ?`
+    )
+    .get(sessionId) as
+    | {
+        id: string;
+        display_name: string;
+        created_at: number;
+        status: string;
+        template_id: string | null;
+        slot_assignments: string | null;
+        final_composite_path: string | null;
+      }
+    | undefined;
+
+  if (!session) {
+    return res.status(404).json({ error: "Sesi tidak ditemukan." });
+  }
+
+  const photos = db
+    .prepare(`SELECT id, file_path FROM photos WHERE session_id = ? ORDER BY captured_at ASC`)
+    .all(sessionId) as { id: string; file_path: string }[];
+
+  res.json({
+    id: session.id,
+    displayName: session.display_name,
+    timestamp: formatTimestamp(session.created_at),
+    status: STATUS_LABEL[session.status] ?? session.status,
+    templateId: session.template_id,
+    slotAssignments: session.slot_assignments ? JSON.parse(session.slot_assignments) : null,
+    finalCompositeUrl: session.final_composite_path
+      ? `/storage/${session.final_composite_path}`
+      : null,
+    photos: photos.map((p) => ({ id: p.id, url: `/storage/${p.file_path}` })),
+  });
+});
+
+// ---- Multer khusus buat upload hasil composite akhir (satu file per sesi) ----
+const uploadFinal = multer({
+  storage: multer.diskStorage({
+    destination: (req, _file, cb) => {
+      const dir = getSessionFolderPath(req.params.id);
+      if (!dir) {
+        cb(new Error("Sesi tidak ditemukan."), "");
+        return;
+      }
+      fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename: (_req, _file, cb) => cb(null, "final.jpg"),
+  }),
+  limits: { fileSize: 20 * 1024 * 1024 },
+});
+
+// POST /api/sessions/:id/finalize — simpan hasil composite + pilihan
+// template/slot, status -> 'Ready to Print'. Bisa dipanggil ulang kapan saja
+// (Business Rule: sesi bisa diedit ulang & digenerate ulang).
+sessionsRouter.post(
+  "/sessions/:id/finalize",
+  uploadFinal.single("finalImage"),
+  (req, res) => {
+    const sessionId = req.params.id;
+    const session = db.prepare(`SELECT display_name, created_at FROM sessions WHERE id = ?`).get(sessionId) as
+      | { display_name: string; created_at: number }
+      | undefined;
+
+    if (!session) {
+      return res.status(404).json({ error: "Sesi tidak ditemukan." });
+    }
+    if (!req.file) {
+      return res.status(400).json({ error: "File hasil composite tidak ditemukan." });
+    }
+
+    const { templateId, slotAssignments } = req.body ?? {};
+    const folderName = computeSessionFolderName(session.display_name, session.created_at, sessionId);
+    const finalPath = path.join(folderName, req.file.filename);
+
+    db.prepare(
+      `UPDATE sessions SET template_id = ?, slot_assignments = ?, final_composite_path = ?, status = 'Ready to Print' WHERE id = ?`
+    ).run(templateId ?? null, slotAssignments ?? null, finalPath, sessionId);
+
+    res.json({ finalCompositeUrl: `/storage/${finalPath}`, status: "Ready to Print" });
+  }
+);
+
 // GET /api/sessions — daftar sesi untuk Queue dashboard.
 // Sesi berstatus 'Capturing' sengaja TIDAK ditampilkan — belum relevan buat
 // laptop sampai capture-nya selesai (jadi 'Waiting').
