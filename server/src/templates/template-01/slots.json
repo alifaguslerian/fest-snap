@@ -1,0 +1,32 @@
+{
+  "id": "template-01",
+  "name": "Strip 4 Foto",
+  "canvasWidth": 600,
+  "canvasHeight": 1800,
+  "slots": [
+    {
+      "x": 50,
+      "y": 60,
+      "width": 500,
+      "height": 350
+    },
+    {
+      "x": 50,
+      "y": 450,
+      "width": 500,
+      "height": 350
+    },
+    {
+      "x": 50,
+      "y": 840,
+      "width": 500,
+      "height": 350
+    },
+    {
+      "x": 50,
+      "y": 1230,
+      "width": 500,
+      "height": 350
+    }
+  ]
+}
