@@ -39,12 +39,49 @@ function formatTimestamp(epochMs: number): string {
   return `${hh}:${mm}`;
 }
 
-// ---- Multer: simpan foto langsung ke folder storage/<sessionId>/ ----
+// ---- Nama folder penyimpanan yang gampang dibaca manual (buat kirim
+// offline/manual), bukan UUID acak. Format: Nama-JamMenit-kodePendek.
+// Kode pendek di belakang tetap menjamin folder tidak bentrok walau ada
+// dua sesi dengan nama+jam yang sama persis (edge case di Business Rules 5.1). ----
+function sanitizeForFilesystem(name: string): string {
+  // Buang karakter yang tidak aman/tidak valid di nama folder Windows/Mac/Linux
+  const cleaned = name.replace(/[^a-zA-Z0-9]/g, "");
+  return cleaned.length > 0 ? cleaned : "Sesi";
+}
+
+function shortId(id: string): string {
+  return id.replace(/-/g, "").slice(0, 6);
+}
+
+function computeSessionFolderName(displayName: string, createdAt: number, id: string): string {
+  const d = new Date(createdAt);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${sanitizeForFilesystem(displayName)}-${hh}${mm}-${shortId(id)}`;
+}
+
+// Cari folder sesi berdasarkan id — query display_name+created_at dulu,
+// baru hitung nama foldernya (dipakai saat upload foto & saat hapus sesi).
+function getSessionFolderPath(sessionId: string): string | null {
+  const row = db
+    .prepare(`SELECT display_name, created_at FROM sessions WHERE id = ?`)
+    .get(sessionId) as { display_name: string; created_at: number } | undefined;
+
+  if (!row) return null;
+  const folderName = computeSessionFolderName(row.display_name, row.created_at, sessionId);
+  return path.join(STORAGE_DIR, folderName);
+}
+
+// ---- Multer: simpan foto ke folder storage/<Nama-JamMenit-kodePendek>/ ----
 const upload = multer({
   storage: multer.diskStorage({
     destination: (req, _file, cb) => {
       const sessionId = req.params.id;
-      const dir = path.join(STORAGE_DIR, sessionId);
+      const dir = getSessionFolderPath(sessionId);
+      if (!dir) {
+        cb(new Error("Sesi tidak ditemukan."), "");
+        return;
+      }
       fs.mkdirSync(dir, { recursive: true });
       cb(null, dir);
     },
@@ -78,7 +115,9 @@ sessionsRouter.post("/sessions", (req, res) => {
 // POST /api/sessions/:id/photos — upload satu foto mentah
 sessionsRouter.post("/sessions/:id/photos", upload.single("photo"), (req, res) => {
   const sessionId = req.params.id;
-  const session = db.prepare(`SELECT id FROM sessions WHERE id = ?`).get(sessionId);
+  const session = db
+    .prepare(`SELECT display_name, created_at FROM sessions WHERE id = ?`)
+    .get(sessionId) as { display_name: string; created_at: number } | undefined;
 
   if (!session) {
     return res.status(404).json({ error: "Sesi tidak ditemukan." });
@@ -89,7 +128,8 @@ sessionsRouter.post("/sessions/:id/photos", upload.single("photo"), (req, res) =
 
   const photoId = crypto.randomUUID();
   const capturedAt = Date.now();
-  const filePath = path.join(sessionId, req.file.filename); // relatif terhadap storage/
+  const folderName = computeSessionFolderName(session.display_name, session.created_at, sessionId);
+  const filePath = path.join(folderName, req.file.filename); // relatif terhadap storage/
 
   db.prepare(
     `INSERT INTO photos (id, session_id, file_path, captured_at) VALUES (?, ?, ?, ?)`
@@ -120,11 +160,14 @@ sessionsRouter.patch("/sessions/:id/status", (req, res) => {
 sessionsRouter.delete("/sessions/:id", (req, res) => {
   const sessionId = req.params.id;
 
+  // Cari lokasi folder DULU — setelah row dihapus, display_name/created_at hilang
+  // dan nama foldernya gak bisa dihitung ulang.
+  const sessionDir = getSessionFolderPath(sessionId);
+
   db.prepare(`DELETE FROM photos WHERE session_id = ?`).run(sessionId);
   const result = db.prepare(`DELETE FROM sessions WHERE id = ?`).run(sessionId);
 
-  const sessionDir = path.join(STORAGE_DIR, sessionId);
-  if (fs.existsSync(sessionDir)) {
+  if (sessionDir && fs.existsSync(sessionDir)) {
     fs.rmSync(sessionDir, { recursive: true, force: true });
   }
 
