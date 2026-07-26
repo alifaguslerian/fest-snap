@@ -1,0 +1,26 @@
+{
+  "id": "template-02",
+  "name": "Grid 3 Foto",
+  "canvasWidth": 900,
+  "canvasHeight": 1200,
+  "slots": [
+    {
+      "x": 60,
+      "y": 60,
+      "width": 380,
+      "height": 500
+    },
+    {
+      "x": 480,
+      "y": 60,
+      "width": 380,
+      "height": 500
+    },
+    {
+      "x": 60,
+      "y": 600,
+      "width": 780,
+      "height": 500
+    }
+  ]
+}
