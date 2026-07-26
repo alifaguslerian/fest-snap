@@ -1,295 +1,257 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Printer, QrCode, Trash2, ArrowLeft, Check } from 'lucide-react';
-
-export interface TemplateItem {
-  id: string;
-  name: string;
-  slotsCount: number;
-  aspectRatio: string; // e.g. '1/2' or '3/4'
-  accentColor: string;
-}
+import {
+  fetchTemplates,
+  fetchSessionDetail,
+  finalizeSession,
+  type TemplateData,
+  type SessionDetail,
+} from '../../lib/api';
+import { composeTemplate, canvasToBlob } from '../../lib/compositing';
 
 export interface EditingProps {
-  sessionLabel?: string; // e.g. "Najwa-14:32"
-  onPrint: () => void;
-  onRequestQR: () => void;
-  onDeleteSession: () => void;
+  sessionId: string;
   onBackToQueue: () => void;
+  onDeleteSession: () => void;
 }
 
-// Sample photo thumbnails
-const MOCK_PHOTOS = [
-  'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=400&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=400&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?w=400&auto=format&fit=crop&q=80',
-];
+/**
+ * Ditulis ulang dari hasil AI Studio (yang pakai foto Unsplash mock dan
+ * auto-fill round-robin) supaya sesuai Business Rule sebenarnya: pengunjung
+ * PILIH SLOT dulu (klik area di preview), baru PILIH FOTO untuk mengisi slot
+ * itu — bukan otomatis. Foto boleh dipakai berulang di banyak slot.
+ * Compositing beneran pakai Canvas API (lib/compositing.ts), bukan lagi
+ * sekadar overlay posisi absolut.
+ */
+export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDeleteSession }) => {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-const MOCK_TEMPLATES: TemplateItem[] = [
-  { id: 't1', name: '4-Grid Klasik', slotsCount: 4, aspectRatio: '1/1', accentColor: '#2F4FE8' },
-  { id: 't2', name: 'Strip 3 Vertikal', slotsCount: 3, aspectRatio: '1/2', accentColor: '#FF6B4A' },
-  { id: 't3', name: 'Frame Festival 4', slotsCount: 4, aspectRatio: '3/4', accentColor: '#FFD93D' },
-  { id: 't4', name: 'Duo Horizon', slotsCount: 2, aspectRatio: '4/3', accentColor: '#16A34A' },
-];
+  const [session, setSession] = useState<SessionDetail | null>(null);
+  const [templates, setTemplates] = useState<TemplateData[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [slotPhotoIds, setSlotPhotoIds] = useState<(string | null)[]>([]);
+  const [activeSlotIndex, setActiveSlotIndex] = useState<number | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
 
-export const Editing: React.FC<EditingProps> = ({
-  sessionLabel = 'Najwa-14:32',
-  onPrint,
-  onRequestQR,
-  onDeleteSession,
-  onBackToQueue,
-}) => {
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('t1');
-  const [selectedPhotoIndices, setSelectedPhotoIndices] = useState<number[]>([0, 1, 2, 3]);
+  // Muat data sesi + daftar template sekali saat halaman dibuka.
+  useEffect(() => {
+    Promise.all([fetchSessionDetail(sessionId), fetchTemplates()])
+      .then(([sessionData, templateList]) => {
+        setSession(sessionData);
+        setTemplates(templateList);
 
-  const currentTemplate = MOCK_TEMPLATES.find((t) => t.id === selectedTemplateId) || MOCK_TEMPLATES[0];
+        // Kalau sesi ini sudah pernah diedit sebelumnya, pulihkan pilihan lama
+        // (Business Rule: sesi bisa dibuka & diedit ulang kapan saja).
+        if (sessionData.templateId) {
+          setSelectedTemplateId(sessionData.templateId);
+          const tpl = templateList.find((t) => t.id === sessionData.templateId);
+          if (tpl) {
+            const restored = sessionData.slotAssignments ?? Array(tpl.slots.length).fill(null);
+            setSlotPhotoIds(restored);
+          }
+        } else if (templateList.length > 0) {
+          setSelectedTemplateId(templateList[0].id);
+          setSlotPhotoIds(Array(templateList[0].slots.length).fill(null));
+        }
+      })
+      .catch((err) => {
+        console.error('Gagal memuat halaman editing:', err);
+        setLoadError('Gagal memuat data sesi. Pastikan server jalan.');
+      });
+  }, [sessionId]);
 
-  const togglePhotoSelection = (index: number) => {
-    if (selectedPhotoIndices.includes(index)) {
-      setSelectedPhotoIndices(selectedPhotoIndices.filter((i) => i !== index));
-    } else {
-      setSelectedPhotoIndices([...selectedPhotoIndices, index]);
+  const selectedTemplate = templates.find((t) => t.id === selectedTemplateId) ?? null;
+
+  const handleSelectTemplate = (tpl: TemplateData) => {
+    setSelectedTemplateId(tpl.id);
+    setSlotPhotoIds(Array(tpl.slots.length).fill(null));
+    setActiveSlotIndex(null);
+  };
+
+  const handleSelectPhoto = (photoId: string) => {
+    if (activeSlotIndex === null) return; // belum pilih slot mana yang mau diisi
+    setSlotPhotoIds((prev) => {
+      const next = [...prev];
+      next[activeSlotIndex] = photoId;
+      return next;
+    });
+  };
+
+  const photoIdToUrl = useCallback(
+    (photoId: string | null) => {
+      if (!photoId || !session) return undefined;
+      return session.photos.find((p) => p.id === photoId)?.url;
+    },
+    [session]
+  );
+
+  // Render ulang preview setiap kali template atau isi slot berubah.
+  useEffect(() => {
+    if (!selectedTemplate || !canvasRef.current) return;
+    const slotPhotoUrls = slotPhotoIds.map(photoIdToUrl);
+    composeTemplate({ canvas: canvasRef.current, template: selectedTemplate, slotPhotoUrls }).catch((err) =>
+      console.error('Gagal render preview:', err)
+    );
+  }, [selectedTemplate, slotPhotoIds, photoIdToUrl]);
+
+  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas || !selectedTemplate) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const clickX = (e.clientX - rect.left) * scaleX;
+    const clickY = (e.clientY - rect.top) * scaleY;
+
+    const idx = selectedTemplate.slots.findIndex(
+      (s) => clickX >= s.x && clickX <= s.x + s.width && clickY >= s.y && clickY <= s.y + s.height
+    );
+    if (idx !== -1) setActiveSlotIndex(idx);
+  };
+
+  const allSlotsFilled = slotPhotoIds.length > 0 && slotPhotoIds.every((id) => id !== null);
+
+  const handleFinish = async () => {
+    if (!canvasRef.current || !selectedTemplateId || !allSlotsFilled) return;
+    setSaving(true);
+    setSaveMessage(null);
+    try {
+      const blob = await canvasToBlob(canvasRef.current);
+      await finalizeSession(sessionId, blob, selectedTemplateId, slotPhotoIds);
+      setSaveMessage('Tersimpan — siap dicetak.');
+    } catch (err) {
+      console.error('Gagal menyimpan hasil akhir:', err);
+      setSaveMessage('Gagal menyimpan. Coba lagi.');
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleDeleteSession = () => {
-    if (window.confirm('Apakah Anda yakin ingin menghapus sesi ini?')) {
-      onDeleteSession();
-    }
-  };
+  if (loadError) {
+    return (
+      <div className="min-h-screen bg-[#FAF6EC] flex items-center justify-center p-8">
+        <p className="text-red-600 font-semibold">{loadError}</p>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <div className="min-h-screen bg-[#FAF6EC] flex items-center justify-center p-8">
+        <p className="text-[#2F4FE8] font-heading italic">Memuat...</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen w-full bg-[#FAF6EC] flex flex-col p-6 sm:p-8 relative overflow-x-hidden select-none">
-      {/* Light Density Decorative Elements */}
-      <div className="absolute top-12 left-12 text-[#FF6B4A] opacity-60 pointer-events-none">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-        </svg>
-      </div>
-      <div className="absolute top-20 right-14 text-[#FFD93D] pointer-events-none opacity-80">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-          <circle cx="12" cy="12" r="10" />
-        </svg>
-      </div>
-
-      {/* Top Header Bar */}
-      <header className="w-full max-w-7xl mx-auto flex items-center justify-between pb-4 border-b-2 border-[#2F4FE8]/20 z-10">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={onBackToQueue}
-            className="bg-white border-2 border-[#2F4FE8] text-[#2F4FE8] hover:bg-[#2F4FE8] hover:text-white rounded-full p-2.5 shadow-[2px_2px_0px_0px_#2F4FE8] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all cursor-pointer"
-            title="Kembali ke antrian"
-          >
-            <ArrowLeft className="w-5 h-5" />
-          </button>
-
-          {/* FEST-SNAP Logo */}
-          <h1 className="font-heading text-2xl sm:text-3xl italic font-extrabold text-[#2F4FE8] tracking-tight">
-            FEST-SNAP
-          </h1>
-
-          {/* Session Identity Badge */}
-          <div className="bg-[#FFD93D] border-2 border-[#2F4FE8] rounded-full px-4 py-1 text-sm font-extrabold text-[#1b1c17] shadow-[2px_2px_0px_0px_#2F4FE8]">
-            {sessionLabel}
-          </div>
-        </div>
-
-        {/* Action Buttons: Back & Delete */}
+    <div className="min-h-screen bg-[#FAF6EC] p-4 sm:p-8">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
           <button
             onClick={onBackToQueue}
-            className="hidden sm:block bg-white border-2 border-[#2F4FE8] text-[#2F4FE8] hover:bg-[#2F4FE8] hover:text-white rounded-full px-5 py-2 font-bold text-sm shadow-[2px_2px_0px_0px_#2F4FE8] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all cursor-pointer"
+            className="p-2 rounded-full border-2 border-[#2F4FE8] text-[#2F4FE8]"
+            aria-label="Kembali ke queue"
           >
-            Kembali ke antrian
+            <ArrowLeft className="w-5 h-5" />
           </button>
-
-          <button
-            onClick={handleDeleteSession}
-            className="bg-white border-2 border-red-600 text-red-600 hover:bg-red-50 rounded-full px-4 py-2 flex items-center gap-2 font-bold text-sm shadow-[2px_2px_0px_0px_#DC2626] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all cursor-pointer"
-          >
-            <Trash2 className="w-4 h-4 text-red-600" />
-            <span className="hidden sm:inline">Hapus sesi</span>
-          </button>
+          <h1 className="font-heading text-2xl italic font-extrabold text-[#2F4FE8]">FEST-SNAP</h1>
+          <span className="bg-[#FFC93C] border-2 border-[#2F4FE8] text-[#5C4400] text-sm font-semibold px-3 py-1 rounded-full">
+            {session.displayName}-{session.timestamp}
+          </span>
         </div>
-      </header>
+        <button
+          onClick={onDeleteSession}
+          className="p-2 rounded-full border-2 border-red-400 text-red-500"
+          aria-label="Hapus sesi"
+        >
+          <Trash2 className="w-5 h-5" />
+        </button>
+      </div>
 
-      {/* Main Content: 3 COLUMNS ARRANGEMENT */}
-      <main className="w-full max-w-7xl mx-auto flex-1 grid grid-cols-1 md:grid-cols-3 gap-6 mt-6 z-10">
-        
-        {/* LEFT COLUMN: Pilih Template */}
-        <section className="bg-white border-2 border-[#2F4FE8] rounded-2xl p-5 shadow-[4px_4px_0px_0px_#2F4FE8] flex flex-col h-[600px]">
-          <div className="flex items-center justify-between pb-3 mb-4 border-b-2 border-gray-100">
-            <h2 className="font-heading text-xl italic font-extrabold text-[#2F4FE8]">
-              Pilih Template
-            </h2>
-            <span className="bg-[#FAF6EC] border border-[#2F4FE8] text-[#2F4FE8] font-bold text-xs px-3 py-1 rounded-full">
-              12 Tersedia
-            </span>
-          </div>
-
-          <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-3">
-            {MOCK_TEMPLATES.map((tmpl) => {
-              const isSelected = tmpl.id === selectedTemplateId;
-              return (
-                <div
-                  key={tmpl.id}
-                  onClick={() => setSelectedTemplateId(tmpl.id)}
-                  className={`relative p-3 rounded-xl border-2 transition-all cursor-pointer flex items-center gap-3 ${
-                    isSelected
-                      ? 'border-[#2F4FE8] bg-[#FAF6EC] shadow-[3px_3px_0px_0px_#2F4FE8]'
-                      : 'border-gray-300 hover:border-[#2F4FE8] bg-white'
-                  }`}
-                >
-                  {/* Template Mini Preview Slot Graphic */}
-                  <div className="w-16 h-20 bg-gray-100 border-2 border-[#2F4FE8] rounded-lg p-1.5 flex flex-col gap-1 items-center justify-center relative overflow-hidden">
-                    <div className="grid grid-cols-2 gap-1 w-full h-full">
-                      {Array.from({ length: tmpl.slotsCount }).map((_, i) => (
-                        <div key={i} className="bg-gray-300 rounded-[2px]" />
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="flex-1">
-                    <h3 className="font-bold text-gray-900 text-sm">{tmpl.name}</h3>
-                    <p className="text-xs text-gray-500 font-medium">{tmpl.slotsCount} Slot Foto</p>
-                  </div>
-
-                  {/* Active Tag */}
-                  {isSelected && (
-                    <span className="bg-[#2F4FE8] text-white text-xs font-bold px-2.5 py-1 rounded-full uppercase tracking-wider">
-                      Aktif
-                    </span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </section>
-
-        {/* MIDDLE COLUMN: Foto Kamu */}
-        <section className="bg-white border-2 border-[#2F4FE8] rounded-2xl p-5 shadow-[4px_4px_0px_0px_#2F4FE8] flex flex-col h-[600px]">
-          <div className="flex items-center justify-between pb-3 mb-4 border-b-2 border-gray-100">
-            <h2 className="font-heading text-xl italic font-extrabold text-[#2F4FE8]">
-              Foto Kamu
-            </h2>
-            <span className="bg-[#FAF6EC] border border-[#2F4FE8] text-[#2F4FE8] font-bold text-xs px-3 py-1 rounded-full">
-              {selectedPhotoIndices.length}/5 Terpilih
-            </span>
-          </div>
-
-          <div className="flex-1 overflow-y-auto pr-1 grid grid-cols-2 gap-3 content-start">
-            {MOCK_PHOTOS.map((photoUrl, idx) => {
-              const isSelected = selectedPhotoIndices.includes(idx);
-              return (
-                <div
-                  key={idx}
-                  onClick={() => togglePhotoSelection(idx)}
-                  className={`relative aspect-square rounded-xl border-2 overflow-hidden transition-all cursor-pointer group ${
-                    isSelected
-                      ? 'border-[#2F4FE8] shadow-[3px_3px_0px_0px_#2F4FE8]'
-                      : 'border-gray-200 hover:border-[#2F4FE8] opacity-75 hover:opacity-100'
-                  }`}
-                >
-                  <img src={photoUrl} alt={`Captured ${idx}`} className="w-full h-full object-cover" />
-                  
-                  {/* Selected Checkmark Badge */}
-                  {isSelected && (
-                    <div className="absolute top-2 right-2 bg-[#FFD93D] text-[#2F4FE8] border-2 border-[#2F4FE8] rounded-full p-1 shadow-sm">
-                      <Check className="w-4 h-4 stroke-[3]" />
-                    </div>
-                  )}
-
-                  <div className="absolute bottom-1 left-2 text-[10px] font-bold text-white drop-shadow-md">
-                    #{idx + 1}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-
-        {/* RIGHT COLUMN: Final Preview Card & Action Buttons */}
-        <section className="bg-white border-2 border-[#2F4FE8] rounded-2xl p-5 shadow-[4px_4px_0px_0px_#2F4FE8] flex flex-col justify-between h-[600px]">
-          <div className="flex items-center justify-between pb-2 mb-2 border-b-2 border-gray-100">
-            <h2 className="font-heading text-xl italic font-extrabold text-[#2F4FE8]">
-              Hasil Photostrip
-            </h2>
-            <span className="text-xs font-bold text-gray-500">{currentTemplate.name}</span>
-          </div>
-
-          {/* Template Slots Visual Preview Placeholder */}
-          <div className="flex-1 my-auto flex items-center justify-center p-2">
-            <div className="w-full max-w-[240px] bg-[#FAF6EC] border-[3px] border-[#2F4FE8] rounded-2xl p-4 shadow-[4px_4px_0px_0px_#2F4FE8] flex flex-col gap-3 items-center">
-              {/* Header inside strip */}
-              <div className="text-center">
-                <p className="font-heading text-xs italic font-black text-[#2F4FE8]">FEST-SNAP 2026</p>
-              </div>
-
-              {/* Slots layout */}
-              <div
-                className={`w-full grid gap-2 ${
-                  currentTemplate.slotsCount === 2
-                    ? 'grid-cols-1'
-                    : currentTemplate.slotsCount === 3
-                    ? 'grid-cols-1'
-                    : 'grid-cols-2'
+      <div className="flex flex-col lg:flex-row gap-6">
+        {/* Kolom kiri: pilih template */}
+        <div className="lg:w-48">
+          <p className="text-sm font-semibold text-gray-700 mb-2">Pilih Template</p>
+          <div className="flex lg:flex-col gap-3 overflow-x-auto lg:overflow-visible">
+            {templates.map((tpl) => (
+              <button
+                key={tpl.id}
+                onClick={() => handleSelectTemplate(tpl)}
+                className={`min-w-[100px] lg:w-full aspect-[3/4] rounded-xl border-2 overflow-hidden bg-white flex-shrink-0 ${
+                  tpl.id === selectedTemplateId ? 'border-[#2F4FE8] border-[3px]' : 'border-gray-300'
                 }`}
               >
-                {Array.from({ length: currentTemplate.slotsCount }).map((_, slotIdx) => {
-                  const photoIndexToUse = selectedPhotoIndices[slotIdx % selectedPhotoIndices.length];
-                  const photoSrc = photoIndexToUse !== undefined ? MOCK_PHOTOS[photoIndexToUse] : null;
-
-                  return (
-                    <div
-                      key={slotIdx}
-                      className="aspect-square bg-white border-2 border-[#2F4FE8] rounded-lg overflow-hidden relative flex items-center justify-center"
-                    >
-                      {photoSrc ? (
-                        <img
-                          src={photoSrc}
-                          alt={`Slot ${slotIdx}`}
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
-                        <span className="text-xs font-bold text-gray-400">Slot {slotIdx + 1}</span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Footer inside strip */}
-              <div className="w-full flex items-center justify-between text-[10px] font-bold text-[#2F4FE8]">
-                <span>HUMANIORA FEST</span>
-                <span>{sessionLabel.split('-')[1] || '14:32'}</span>
-              </div>
-            </div>
+                <img src={tpl.frameUrl} alt={tpl.name} className="w-full h-full object-contain" />
+              </button>
+            ))}
           </div>
+        </div>
 
-          {/* Two Equal-Weight Pill Buttons Below Preview */}
-          <div className="grid grid-cols-2 gap-3 pt-4 border-t-2 border-gray-100">
-            {/* Cetak Button */}
+        {/* Kolom tengah: preview (klik slot untuk aktifkan) */}
+        <div className="flex-1 flex flex-col items-center">
+          <p className="text-sm font-semibold text-gray-700 mb-2 self-start">
+            Preview — klik slot foto untuk memilih, lalu klik foto di kanan
+          </p>
+          <canvas
+            ref={canvasRef}
+            onClick={handleCanvasClick}
+            className="max-w-full border-2 border-[#2F4FE8] rounded-xl cursor-pointer bg-white"
+            style={{ maxHeight: '70vh' }}
+          />
+          <div className="flex gap-3 mt-4">
             <button
-              onClick={onPrint}
-              className="w-full bg-white border-2 border-[#2F4FE8] text-[#2F4FE8] hover:bg-[#2F4FE8] hover:text-white rounded-full py-3 px-4 flex items-center justify-center gap-2 font-bold text-sm shadow-[3px_3px_0px_0px_#2F4FE8] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all cursor-pointer"
+              onClick={handleFinish}
+              disabled={!allSlotsFilled || saving}
+              className="flex items-center gap-2 bg-white border-2 border-[#2F4FE8] text-[#2F4FE8] font-bold px-6 py-3 rounded-full disabled:opacity-40"
             >
-              <Printer className="w-4 h-4" />
-              <span>Cetak</span>
+              <Check className="w-5 h-5" />
+              {saving ? 'Menyimpan...' : 'Selesai'}
             </button>
-
-            {/* QR Download Button */}
             <button
-              onClick={onRequestQR}
-              className="w-full bg-white border-2 border-[#2F4FE8] text-[#2F4FE8] hover:bg-[#2F4FE8] hover:text-white rounded-full py-3 px-4 flex items-center justify-center gap-2 font-bold text-sm shadow-[3px_3px_0px_0px_#2F4FE8] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all cursor-pointer"
+              disabled
+              title="Tersedia setelah hasil akhir disimpan (Slice 3)"
+              className="flex items-center gap-2 bg-white border-2 border-gray-300 text-gray-400 font-bold px-6 py-3 rounded-full"
             >
-              <QrCode className="w-4 h-4" />
-              <span>QR Download</span>
+              <Printer className="w-5 h-5" />
+              Cetak
+            </button>
+            <button
+              disabled
+              title="Tersedia di Slice 4"
+              className="flex items-center gap-2 bg-white border-2 border-gray-300 text-gray-400 font-bold px-6 py-3 rounded-full"
+            >
+              <QrCode className="w-5 h-5" />
+              QR Download
             </button>
           </div>
-        </section>
+          {saveMessage && <p className="mt-2 text-sm font-semibold text-[#2F4FE8]">{saveMessage}</p>}
+          {!allSlotsFilled && (
+            <p className="mt-2 text-xs text-gray-500">Isi semua slot foto dulu sebelum bisa menyimpan.</p>
+          )}
+        </div>
 
-      </main>
+        {/* Kolom kanan: foto mentah */}
+        <div className="lg:w-56">
+          <p className="text-sm font-semibold text-gray-700 mb-2">
+            Foto Kamu {activeSlotIndex !== null && <span className="text-[#2F4FE8]">(mengisi slot {activeSlotIndex + 1})</span>}
+          </p>
+          <div className="grid grid-cols-3 lg:grid-cols-2 gap-2">
+            {session.photos.map((photo) => (
+              <button
+                key={photo.id}
+                onClick={() => handleSelectPhoto(photo.id)}
+                disabled={activeSlotIndex === null}
+                className="aspect-square rounded-lg overflow-hidden border-2 border-gray-200 disabled:opacity-50"
+              >
+                <img src={photo.url} alt="" className="w-full h-full object-cover" />
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   );
 };
