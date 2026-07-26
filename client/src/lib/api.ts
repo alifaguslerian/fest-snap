@@ -66,6 +66,68 @@ export async function deleteAllSessions(): Promise<void> {
   }
 }
 
+export interface TemplateSlot {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface TemplateData {
+  id: string;
+  name: string;
+  canvasWidth: number;
+  canvasHeight: number;
+  slots: TemplateSlot[];
+  frameUrl: string;
+}
+
+export async function fetchTemplates(): Promise<TemplateData[]> {
+  const res = await fetch("/api/templates");
+  if (!res.ok) throw new Error(`Gagal mengambil daftar template (status ${res.status})`);
+  const body = await res.json();
+  return body.templates;
+}
+
+export interface SessionDetail {
+  id: string;
+  displayName: string;
+  timestamp: string;
+  status: string;
+  templateId: string | null;
+  slotAssignments: (string | null)[] | null; // array of photo id per slot
+  finalCompositeUrl: string | null;
+  photos: { id: string; url: string }[];
+}
+
+export async function fetchSessionDetail(sessionId: string): Promise<SessionDetail> {
+  const res = await fetch(`/api/sessions/${sessionId}`);
+  if (!res.ok) throw new Error(`Gagal mengambil detail sesi (status ${res.status})`);
+  return res.json();
+}
+
+export async function finalizeSession(
+  sessionId: string,
+  finalImageBlob: Blob,
+  templateId: string,
+  slotAssignments: (string | null)[]
+): Promise<{ finalCompositeUrl: string }> {
+  const formData = new FormData();
+  formData.append("finalImage", finalImageBlob, "final.jpg");
+  formData.append("templateId", templateId);
+  formData.append("slotAssignments", JSON.stringify(slotAssignments));
+
+  const res = await fetch(`/api/sessions/${sessionId}/finalize`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `Gagal menyimpan hasil akhir (status ${res.status})`);
+  }
+  return res.json();
+}
+
 export interface QueueSessionDTO {
   id: string;
   name: string;
