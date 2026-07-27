@@ -17,3 +17,4 @@ server/src/storage/*
 *.log
 .DS_Store
 Thumbs.db
+server/src/templates/
