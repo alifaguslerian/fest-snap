@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Printer, QrCode, Trash2, Check } from 'lucide-react';
+import { Printer, QrCode, Trash2, Check, Maximize2, X } from 'lucide-react';
 import {
   fetchTemplates,
   fetchSessionDetail,
@@ -35,6 +35,7 @@ export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDe
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [zoomImageUrl, setZoomImageUrl] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([fetchSessionDetail(sessionId), fetchTemplates()])
@@ -122,6 +123,11 @@ export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDe
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleOpenZoom = () => {
+    if (!canvasRef.current) return;
+    setZoomImageUrl(canvasRef.current.toDataURL('image/jpeg', 0.92));
   };
 
   const handleDeleteSession = () => {
@@ -219,7 +225,7 @@ export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDe
               </p>
             )}
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-2">
               {session.photos.map((photo) => {
                 const usedInSlot = slotPhotoIds.includes(photo.id);
                 return (
@@ -227,12 +233,12 @@ export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDe
                     key={photo.id}
                     onClick={() => handleSelectPhoto(photo.id)}
                     disabled={activeSlotIndex === null}
-                    className="relative aspect-square rounded-md border-[3px] border-[#2F4FE8] overflow-hidden shadow-[3px_3px_0px_0px_#2F4FE8] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="relative aspect-square rounded-md border-[2.5px] border-[#2F4FE8] overflow-hidden shadow-[2px_2px_0px_0px_#2F4FE8] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <img src={photo.url} alt="" className="w-full h-full object-cover" />
                     {usedInSlot && (
-                      <div className="absolute bottom-2 right-2 bg-[#FFC93C] text-[#2F4FE8] border-2 border-[#2F4FE8] rounded-full w-6 h-6 flex items-center justify-center shadow-sm">
-                        <Check className="w-3.5 h-3.5 stroke-[3]" />
+                      <div className="absolute bottom-1 right-1 bg-[#FFC93C] text-[#2F4FE8] border-2 border-[#2F4FE8] rounded-full w-5 h-5 flex items-center justify-center shadow-sm">
+                        <Check className="w-3 h-3 stroke-[3]" />
                       </div>
                     )}
                   </button>
@@ -243,12 +249,19 @@ export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDe
 
           {/* Preview + aksi */}
           <section className="md:col-span-7 flex flex-col items-center gap-4">
-            <div className="w-full max-w-[460px] bg-white border-[3px] border-[#2F4FE8] rounded-md p-4 shadow-[4px_4px_0px_0px_#2F4FE8] flex justify-center">
+            <div className="relative w-full max-w-[420px] bg-white border-[3px] border-[#2F4FE8] rounded-md p-3 shadow-[4px_4px_0px_0px_#2F4FE8] flex justify-center">
+              <button
+                onClick={handleOpenZoom}
+                title="Lihat besar"
+                className="absolute top-2 right-2 z-10 bg-white border-2 border-[#2F4FE8] text-[#2F4FE8] rounded-full p-1.5 shadow-[2px_2px_0px_0px_#2F4FE8]"
+              >
+                <Maximize2 className="w-3.5 h-3.5" />
+              </button>
               <canvas
                 ref={canvasRef}
                 onClick={handleCanvasClick}
                 className="max-w-full cursor-pointer"
-                style={{ maxHeight: '55vh' }}
+                style={{ maxHeight: '42vh' }}
               />
             </div>
 
@@ -318,6 +331,27 @@ export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDe
           </div>
         </section>
       </main>
+
+      {/* Modal lihat preview besar */}
+      {zoomImageUrl && (
+        <div
+          className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-6"
+          onClick={() => setZoomImageUrl(null)}
+        >
+          <button
+            onClick={() => setZoomImageUrl(null)}
+            className="absolute top-5 right-5 bg-white border-2 border-[#2F4FE8] text-[#2F4FE8] rounded-full p-2"
+          >
+            <X className="w-5 h-5" />
+          </button>
+          <img
+            src={zoomImageUrl}
+            alt="Preview besar"
+            className="max-w-full max-h-full rounded-md border-[3px] border-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
     </div>
   );
 };
