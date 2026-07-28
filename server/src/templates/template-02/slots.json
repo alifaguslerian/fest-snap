@@ -1,26 +1,36 @@
 {
-  "id": "template-02",
-  "name": "Grid 3 Foto",
-  "canvasWidth": 900,
-  "canvasHeight": 1200,
+  "id": "template-4",
+  "name": "template 4",
+  "canvasWidth": 746,
+  "canvasHeight": 2108,
   "slots": [
     {
-      "x": 60,
-      "y": 60,
-      "width": 380,
-      "height": 500
+      "id": 2,
+      "x": 82,
+      "y": 218,
+      "width": 582,
+      "height": 367
     },
     {
-      "x": 480,
-      "y": 60,
-      "width": 380,
-      "height": 500
+      "id": 4,
+      "x": 82,
+      "y": 621,
+      "width": 580,
+      "height": 368
     },
     {
-      "x": 60,
-      "y": 600,
-      "width": 780,
-      "height": 500
+      "id": 6,
+      "x": 84,
+      "y": 1022,
+      "width": 579,
+      "height": 370
+    },
+    {
+      "id": 8,
+      "x": 83,
+      "y": 1426,
+      "width": 579,
+      "height": 369
     }
   ]
 }
