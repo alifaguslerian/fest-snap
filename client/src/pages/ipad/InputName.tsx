@@ -72,7 +72,7 @@ export const InputName: React.FC<InputNameProps> = ({ onSubmit, onTimeout }) => 
                 type="text"
                 value={name}
                 onChange={(e) => validateAndSetName(e.target.value)}
-                placeholder="Najwa"
+                placeholder="Masukkan nama sesi"
                 maxLength={12} // Allow typing slightly over to show inline error message
                 autoFocus
                 className="w-full text-center text-2xl sm:text-3xl font-bold text-[#1b1c17] bg-[#FAF6EC] border-[3px] border-[#2F4FE8] rounded-2xl py-4 px-6 focus:outline-none focus:ring-4 focus:ring-[#FFC93C] transition-all placeholder:text-gray-400"
