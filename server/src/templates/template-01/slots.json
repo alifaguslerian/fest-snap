@@ -1,32 +1,36 @@
 {
-  "id": "template-01",
-  "name": "Strip 4 Foto",
-  "canvasWidth": 600,
-  "canvasHeight": 1800,
+  "id": "new-template",
+  "name": "New Template",
+  "canvasWidth": 608,
+  "canvasHeight": 1744,
   "slots": [
     {
-      "x": 50,
-      "y": 60,
-      "width": 500,
-      "height": 350
+      "id": 2,
+      "x": 79,
+      "y": 183,
+      "width": 450,
+      "height": 335
     },
     {
-      "x": 50,
-      "y": 450,
-      "width": 500,
-      "height": 350
+      "id": 4,
+      "x": 79,
+      "y": 541,
+      "width": 451,
+      "height": 339
     },
     {
-      "x": 50,
-      "y": 840,
-      "width": 500,
-      "height": 350
+      "id": 6,
+      "x": 79,
+      "y": 907,
+      "width": 451,
+      "height": 338
     },
     {
-      "x": 50,
-      "y": 1230,
-      "width": 500,
-      "height": 350
+      "id": 8,
+      "x": 79,
+      "y": 1268,
+      "width": 450,
+      "height": 338
     }
   ]
 }
