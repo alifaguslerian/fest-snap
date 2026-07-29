@@ -4,10 +4,12 @@ import {
   fetchTemplates,
   fetchSessionDetail,
   finalizeSession,
+  updateSessionStatus,
   type TemplateData,
   type SessionDetail,
 } from '../../lib/api';
 import { composeTemplate, canvasToBlob } from '../../lib/compositing';
+import { printCompositeImage } from '../../lib/print';
 
 export interface EditingProps {
   sessionId: string;
@@ -36,6 +38,7 @@ export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDe
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [zoomImageUrl, setZoomImageUrl] = useState<string | null>(null);
+  const [printing, setPrinting] = useState(false);
 
   useEffect(() => {
     Promise.all([fetchSessionDetail(sessionId), fetchTemplates()])
@@ -115,13 +118,53 @@ export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDe
     setSaveMessage(null);
     try {
       const blob = await canvasToBlob(canvasRef.current);
-      await finalizeSession(sessionId, blob, selectedTemplateId, slotPhotoIds);
+      const result = await finalizeSession(sessionId, blob, selectedTemplateId, slotPhotoIds);
       setSaveMessage('Tersimpan — siap dicetak.');
+      // Bug fix: sebelumnya state session lokal gak pernah di-update setelah
+      // simpan, jadi tombol Cetak gak tau ada hasil baru tanpa reload manual.
+      setSession((prev) =>
+        prev
+          ? {
+              ...prev,
+              templateId: selectedTemplateId,
+              slotAssignments: slotPhotoIds,
+              finalCompositeUrl: result.finalCompositeUrl,
+              status: 'Siap Cetak',
+            }
+          : prev
+      );
     } catch (err) {
       console.error('Gagal menyimpan hasil akhir:', err);
       setSaveMessage('Gagal menyimpan. Coba lagi.');
     } finally {
       setSaving(false);
+    }
+  };
+
+  // Ada perubahan yang belum disimpan? (template/slot beda dari yang tersimpan
+  // terakhir) — dipakai buat kasih hint sebelum cetak versi lama.
+  const hasUnsavedChanges =
+    session != null &&
+    (session.templateId !== selectedTemplateId ||
+      JSON.stringify(session.slotAssignments) !== JSON.stringify(slotPhotoIds));
+
+  const handlePrint = async () => {
+    if (!session?.finalCompositeUrl || !session.templateId) return;
+    const savedTemplate = templates.find((t) => t.id === session.templateId);
+    if (!savedTemplate) return;
+
+    setPrinting(true);
+    try {
+      // Cetak pakai hasil yang TERSIMPAN terakhir (bukan preview yang lagi
+      // diedit sekarang kalau belum di-"Simpan hasil") — sengaja begitu,
+      // supaya "Cetak" selalu mencetak versi yang sudah dikonfirmasi.
+      await printCompositeImage(session.finalCompositeUrl, savedTemplate.canvasWidth, savedTemplate.canvasHeight);
+      await updateSessionStatus(sessionId, 'Printed');
+      setSession((prev) => (prev ? { ...prev, status: 'Tercetak' } : prev));
+    } catch (err) {
+      console.error('Gagal mencetak:', err);
+    } finally {
+      setPrinting(false);
     }
   };
 
@@ -273,15 +316,24 @@ export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDe
               {saving ? 'Menyimpan...' : 'Simpan hasil'}
             </button>
             {saveMessage && <p className="text-xs font-semibold text-[#2F4FE8]">{saveMessage}</p>}
+            {hasUnsavedChanges && (
+              <p className="text-xs text-amber-600 font-semibold">
+                Ada perubahan belum disimpan — Cetak akan pakai versi terakhir yang tersimpan.
+              </p>
+            )}
+            {session.status === 'Tercetak' && !hasUnsavedChanges && (
+              <p className="text-xs text-green-700 font-semibold">Sudah pernah dicetak.</p>
+            )}
 
             <div className="flex gap-4 w-full max-w-[400px]">
               <button
-                disabled
-                title="Tersedia setelah Slice 3"
-                className="flex-1 bg-white border-2 border-[#2F4FE8] text-[#2F4FE8] rounded-full py-2.5 px-4 flex items-center justify-center gap-2 font-bold text-sm shadow-[2px_2px_0px_0px_#2F4FE8] disabled:opacity-40 disabled:shadow-none cursor-not-allowed"
+                onClick={handlePrint}
+                disabled={!session.finalCompositeUrl || printing}
+                title={!session.finalCompositeUrl ? 'Simpan hasil dulu sebelum bisa cetak' : undefined}
+                className="flex-1 bg-white border-2 border-[#2F4FE8] text-[#2F4FE8] rounded-full py-2.5 px-4 flex items-center justify-center gap-2 font-bold text-sm shadow-[2px_2px_0px_0px_#2F4FE8] disabled:opacity-40 disabled:shadow-none disabled:cursor-not-allowed cursor-pointer"
               >
                 <Printer className="w-4 h-4" />
-                <span>Cetak</span>
+                <span>{printing ? 'Menyiapkan cetak...' : session.status === 'Tercetak' ? 'Cetak ulang' : 'Cetak'}</span>
               </button>
               <button
                 disabled
