@@ -38,6 +38,7 @@ export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDe
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [zoomImageUrl, setZoomImageUrl] = useState<string | null>(null);
+  const [qrModalOpen, setQrModalOpen] = useState(false);
   const [printing, setPrinting] = useState(false);
 
   useEffect(() => {
@@ -336,9 +337,10 @@ export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDe
                 <span>{printing ? 'Menyiapkan cetak...' : session.status === 'Tercetak' ? 'Cetak ulang' : 'Cetak'}</span>
               </button>
               <button
-                disabled
-                title="Tersedia setelah Slice 4"
-                className="flex-1 bg-white border-2 border-[#2F4FE8] text-[#2F4FE8] rounded-full py-2.5 px-4 flex items-center justify-center gap-2 font-bold text-sm shadow-[2px_2px_0px_0px_#2F4FE8] disabled:opacity-40 disabled:shadow-none cursor-not-allowed"
+                onClick={() => setQrModalOpen(true)}
+                disabled={!session.finalCompositeUrl}
+                title={!session.finalCompositeUrl ? 'Simpan hasil dulu sebelum bisa generate QR' : undefined}
+                className="flex-1 bg-white border-2 border-[#2F4FE8] text-[#2F4FE8] rounded-full py-2.5 px-4 flex items-center justify-center gap-2 font-bold text-sm shadow-[2px_2px_0px_0px_#2F4FE8] disabled:opacity-40 disabled:shadow-none disabled:cursor-not-allowed cursor-pointer"
               >
                 <QrCode className="w-4 h-4" />
                 <span>QR Download</span>
@@ -402,6 +404,35 @@ export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDe
             className="max-w-full max-h-full rounded-md border-[3px] border-white shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           />
+        </div>
+      )}
+
+      {/* Modal QR download */}
+      {qrModalOpen && (
+        <div
+          className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-6"
+          onClick={() => setQrModalOpen(false)}
+        >
+          <button
+            onClick={() => setQrModalOpen(false)}
+            className="absolute top-5 right-5 bg-white border-2 border-[#2F4FE8] text-[#2F4FE8] rounded-full p-2"
+          >
+            <X className="w-5 h-5" />
+          </button>
+          <div
+            className="bg-white rounded-md p-6 flex flex-col items-center gap-3 max-w-[360px]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="font-heading italic font-extrabold text-[#2F4FE8] text-lg">Scan buat unduh</p>
+            <img
+              src={`/api/sessions/${sessionId}/qr?t=${Date.now()}`}
+              alt="QR download"
+              className="w-64 h-64 border-2 border-[#2F4FE8] rounded-md"
+            />
+            <p className="text-xs text-gray-500 text-center">
+              Pastikan HP kamu di jaringan WiFi yang sama, kecuali kalau muncul sebagai link cloud.
+            </p>
+          </div>
         </div>
       )}
     </div>
