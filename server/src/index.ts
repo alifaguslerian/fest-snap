@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import https from "node:https";
@@ -7,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { healthRouter } from "./routes/health.js";
 import { sessionsRouter } from "./routes/sessions.js";
 import { templatesRouter } from "./routes/templates.js";
+import { qrRouter, downloadPageRouter } from "./routes/download.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -31,6 +33,8 @@ app.use("/templates", express.static(path.join(__dirname, "templates")));
 app.use("/api", healthRouter);
 app.use("/api", sessionsRouter);
 app.use("/api", templatesRouter);
+app.use("/api", qrRouter);
+app.use(downloadPageRouter); // root-level: /download/:id (dibuka HP pengunjung)
 
 const PORT = 8443;
 
