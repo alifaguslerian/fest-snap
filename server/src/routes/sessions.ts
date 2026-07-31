@@ -5,6 +5,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { db } from "../db/index.js";
+import { uploadToCloud } from "../lib/cloudStorage.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STORAGE_DIR = path.join(__dirname, "../storage");
@@ -259,7 +260,7 @@ const uploadFinal = multer({
 sessionsRouter.post(
   "/sessions/:id/finalize",
   uploadFinal.single("finalImage"),
-  (req, res) => {
+  async (req, res) => {
     const sessionId = req.params.id;
     const session = db.prepare(`SELECT display_name, created_at FROM sessions WHERE id = ?`).get(sessionId) as
       | { display_name: string; created_at: number }
@@ -276,11 +277,27 @@ sessionsRouter.post(
     const folderName = computeSessionFolderName(session.display_name, session.created_at, sessionId);
     const finalPath = path.join(folderName, req.file.filename);
 
+    // Langkah 1: simpan lokal — SELALU, tanpa syarat (lihat
+    // software-architecture.md section 7). Ini yang bikin status jadi
+    // Ready to Print, apapun hasil upload cloud di bawah nanti.
     db.prepare(
       `UPDATE sessions SET template_id = ?, slot_assignments = ?, final_composite_path = ?, status = 'Ready to Print' WHERE id = ?`
     ).run(templateId ?? null, slotAssignments ?? null, finalPath, sessionId);
 
-    res.json({ finalCompositeUrl: `/storage/${finalPath}`, status: "Ready to Print" });
+    // Langkah 2: coba upload ke cloud (best-effort, ada timeout internal).
+    // Kalau gagal/timeout/belum dikonfigurasi, cloud_url tetap null — QR
+    // nanti otomatis pakai jalur local (lihat routes/download.ts).
+    const absolutePath = path.join(STORAGE_DIR, finalPath);
+    const cloudUrl = await uploadToCloud(absolutePath, `${folderName}.jpg`);
+    if (cloudUrl) {
+      db.prepare(`UPDATE sessions SET cloud_url = ? WHERE id = ?`).run(cloudUrl, sessionId);
+    }
+
+    res.json({
+      finalCompositeUrl: `/storage/${finalPath}`,
+      status: "Ready to Print",
+      cloudUrl,
+    });
   }
 );
 
