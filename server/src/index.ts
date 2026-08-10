@@ -34,7 +34,38 @@ app.use("/api", healthRouter);
 app.use("/api", sessionsRouter);
 app.use("/api", templatesRouter);
 app.use("/api", qrRouter);
+// Endpoint /api yang gak ke-match router manapun di atas -> 404 JSON yang
+// rapi (bukan ikut ke-fallback ke halaman HTML SPA di bawah).
+app.use("/api", (_req, res) => {
+  res.status(404).json({ error: "Endpoint tidak ditemukan." });
+});
 app.use(downloadPageRouter); // root-level: /download/:id (dibuka HP pengunjung)
+
+// Sajikan build React (production/packaged mode). Saat development biasa,
+// client dijalankan terpisah lewat Vite (npm run dev di folder client) untuk
+// hot-reload, jadi folder ini belum tentu ada — dicek dulu biar gak error.
+const CLIENT_DIST_DIR = path.join(__dirname, "../../client/dist");
+const clientBuildExists = fs.existsSync(path.join(CLIENT_DIST_DIR, "index.html"));
+if (clientBuildExists) {
+  app.use(express.static(CLIENT_DIST_DIR));
+}
+
+// SPA fallback — path apa pun yang bukan /api, /storage, /templates,
+// /download (semua sudah ditangani route di atas) diserahkan ke index.html
+// React, supaya buka langsung /queue atau /queue/:id gak 404. HARUS paling
+// terakhir didaftarkan.
+app.get("*", (_req, res) => {
+  if (clientBuildExists) {
+    res.sendFile(path.join(CLIENT_DIST_DIR, "index.html"));
+  } else {
+    res
+      .status(404)
+      .send(
+        "Client build belum ada. Jalankan `npm run build` di folder client, " +
+          "atau pakai Vite dev server terpisah (npm run dev) untuk development."
+      );
+  }
+});
 
 const PORT = 8443;
 
