@@ -1,16 +1,19 @@
-import Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dbPath = path.join(__dirname, "../../fest-snap.db");
 
-export const db = new Database(dbPath);
-db.pragma("journal_mode = WAL");
+// Migrasi dari better-sqlite3 ke node:sqlite (bawaan Node.js, stabil sejak
+// v22.22, tidak perlu native addon terkompilasi) — supaya bisa dipaketkan
+// jadi satu executable (SEA) tanpa komplikasi native binary terpisah.
+// API-nya nyaris identik: exec()/prepare().run()/.get()/.all() sama persis,
+// cuma pragma() gak ada method khusus, dipanggil lewat exec() biasa.
+export const db = new DatabaseSync(dbPath);
+db.exec("PRAGMA journal_mode = WAL");
 
 // Skema dasar sesuai data model di software-architecture.md (section 4).
-// Dipakai mulai Slice 1 — belum ada endpoint yang menulis ke sini di Slice 0,
-// tapi tabel disiapkan dari awal biar Slice 1 tinggal pakai.
 db.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
