@@ -16,7 +16,7 @@ const UPLOAD_TIMEOUT_MS = 6_000;
 
 function isCloudConfigured(): boolean {
   return Boolean(
-    process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY && process.env.SUPABASE_BUCKET
+    process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY && process.env.SUPABASE_BUCKET
   );
 }
 
@@ -29,7 +29,7 @@ export async function uploadToCloud(
     return null;
   }
 
-  const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
+  const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
   const bucket = process.env.SUPABASE_BUCKET!;
 
   const uploadPromise = (async () => {
