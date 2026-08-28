@@ -1,0 +1,32 @@
+{
+  "id": "template-03",
+  "name": "Harmonia Fest - Cream",
+  "canvasWidth": 707,
+  "canvasHeight": 2000,
+  "slots": [
+    {
+      "x": 39,
+      "y": 401,
+      "width": 628,
+      "height": 370
+    },
+    {
+      "x": 39,
+      "y": 799,
+      "width": 628,
+      "height": 370
+    },
+    {
+      "x": 39,
+      "y": 1199,
+      "width": 628,
+      "height": 370
+    },
+    {
+      "x": 39,
+      "y": 1597,
+      "width": 628,
+      "height": 370
+    }
+  ]
+}
