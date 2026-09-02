@@ -3,12 +3,11 @@ import multer from "multer";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { fileURLToPath } from "node:url";
 import { db } from "../db/index.js";
 import { uploadToCloud } from "../lib/cloudStorage.js";
+import { APP_ROOT } from "../lib/appRoot.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const STORAGE_DIR = path.join(__dirname, "../storage");
+const STORAGE_DIR = path.join(APP_ROOT, "storage");
 
 export const sessionsRouter = Router();
 
@@ -166,6 +165,7 @@ sessionsRouter.delete("/sessions/:id", (req, res) => {
   const sessionDir = getSessionFolderPath(sessionId);
 
   db.prepare(`DELETE FROM photos WHERE session_id = ?`).run(sessionId);
+  db.prepare(`DELETE FROM composites WHERE session_id = ?`).run(sessionId);
   const result = db.prepare(`DELETE FROM sessions WHERE id = ?`).run(sessionId);
 
   if (sessionDir && fs.existsSync(sessionDir)) {
@@ -182,6 +182,7 @@ sessionsRouter.delete("/sessions/:id", (req, res) => {
 // DELETE /api/sessions — hapus SELURUH data event (FR-22)
 sessionsRouter.delete("/sessions", (_req, res) => {
   db.prepare(`DELETE FROM photos`).run();
+  db.prepare(`DELETE FROM composites`).run();
   db.prepare(`DELETE FROM sessions`).run();
 
   if (fs.existsSync(STORAGE_DIR)) {
@@ -223,6 +224,21 @@ sessionsRouter.get("/sessions/:id", (req, res) => {
     .prepare(`SELECT id, file_path FROM photos WHERE session_id = ? ORDER BY captured_at ASC`)
     .all(sessionId) as { id: string; file_path: string }[];
 
+  const composites = db
+    .prepare(
+      `SELECT id, version, template_id, slot_assignments, file_path, cloud_url, created_at
+       FROM composites WHERE session_id = ? ORDER BY version DESC`
+    )
+    .all(sessionId) as {
+    id: string;
+    version: number;
+    template_id: string;
+    slot_assignments: string | null;
+    file_path: string;
+    cloud_url: string | null;
+    created_at: number;
+  }[];
+
   res.json({
     id: session.id,
     displayName: session.display_name,
@@ -234,10 +250,24 @@ sessionsRouter.get("/sessions/:id", (req, res) => {
       ? `/storage/${session.final_composite_path}`
       : null,
     photos: photos.map((p) => ({ id: p.id, url: `/storage/${p.file_path}` })),
+    // Semua versi hasil akhir, terbaru duluan — biar operator (dan halaman
+    // download) bisa akses versi lama juga, gak cuma yang paling baru.
+    composites: composites.map((c) => ({
+      id: c.id,
+      version: c.version,
+      templateId: c.template_id,
+      slotAssignments: c.slot_assignments ? JSON.parse(c.slot_assignments) : null,
+      url: `/storage/${c.file_path}`,
+      cloudUrl: c.cloud_url,
+      createdAt: c.created_at,
+    })),
   });
 });
 
-// ---- Multer khusus buat upload hasil composite akhir (satu file per sesi) ----
+// ---- Multer khusus buat upload hasil composite akhir. Nama file
+// versioned (v1.jpg, v2.jpg, dst) — SENGAJA gak nimpa file lama, karena
+// satu sesi sekarang bisa punya banyak hasil akhir (lihat komentar di
+// db/index.ts). ----
 const uploadFinal = multer({
   storage: multer.diskStorage({
     destination: (req, _file, cb) => {
@@ -249,14 +279,21 @@ const uploadFinal = multer({
       fs.mkdirSync(dir, { recursive: true });
       cb(null, dir);
     },
-    filename: (_req, _file, cb) => cb(null, "final.jpg"),
+    filename: (req, _file, cb) => {
+      const count = db
+        .prepare(`SELECT COUNT(*) as n FROM composites WHERE session_id = ?`)
+        .get(req.params.id) as { n: number };
+      cb(null, `v${count.n + 1}.jpg`);
+    },
   }),
   limits: { fileSize: 20 * 1024 * 1024 },
 });
 
-// POST /api/sessions/:id/finalize — simpan hasil composite + pilihan
-// template/slot, status -> 'Ready to Print'. Bisa dipanggil ulang kapan saja
-// (Business Rule: sesi bisa diedit ulang & digenerate ulang).
+// POST /api/sessions/:id/finalize — simpan hasil composite sebagai VERSI
+// BARU (gak menimpa yang lama), status -> 'Ready to Print'. Bisa dipanggil
+// ulang kapan saja dengan template/slot berbeda (Business Rule: sesi bisa
+// diedit ulang & digenerate ulang) — versi-versi sebelumnya tetap tersimpan
+// dan bisa diunduh (lihat routes/download.ts).
 sessionsRouter.post(
   "/sessions/:id/finalize",
   uploadFinal.single("finalImage"),
@@ -274,26 +311,44 @@ sessionsRouter.post(
     }
 
     const { templateId, slotAssignments } = req.body ?? {};
+    if (!templateId) {
+      return res.status(400).json({ error: "templateId wajib diisi." });
+    }
     const folderName = computeSessionFolderName(session.display_name, session.created_at, sessionId);
     const finalPath = path.join(folderName, req.file.filename);
+    const compositeId = crypto.randomUUID();
+    const createdAt = Date.now();
+    const version = db
+      .prepare(`SELECT COUNT(*) as n FROM composites WHERE session_id = ?`)
+      .get(sessionId) as { n: number };
 
     // Langkah 1: simpan lokal — SELALU, tanpa syarat (lihat
     // software-architecture.md section 7). Ini yang bikin status jadi
     // Ready to Print, apapun hasil upload cloud di bawah nanti.
     db.prepare(
+      `INSERT INTO composites (id, session_id, version, template_id, slot_assignments, file_path, cloud_url, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`
+    ).run(compositeId, sessionId, version.n + 1, templateId, slotAssignments ?? null, finalPath, createdAt);
+
+    // "Cache" composite terbaru di kolom sessions — dipakai Queue & untuk
+    // Editing tau state terakhir tanpa perlu query composites terpisah.
+    db.prepare(
       `UPDATE sessions SET template_id = ?, slot_assignments = ?, final_composite_path = ?, status = 'Ready to Print' WHERE id = ?`
-    ).run(templateId ?? null, slotAssignments ?? null, finalPath, sessionId);
+    ).run(templateId, slotAssignments ?? null, finalPath, sessionId);
 
     // Langkah 2: coba upload ke cloud (best-effort, ada timeout internal).
     // Kalau gagal/timeout/belum dikonfigurasi, cloud_url tetap null — QR
     // nanti otomatis pakai jalur local (lihat routes/download.ts).
     const absolutePath = path.join(STORAGE_DIR, finalPath);
-    const cloudUrl = await uploadToCloud(absolutePath, `${folderName}.jpg`);
+    const cloudUrl = await uploadToCloud(absolutePath, `${folderName}-v${version.n + 1}.jpg`);
     if (cloudUrl) {
+      db.prepare(`UPDATE composites SET cloud_url = ? WHERE id = ?`).run(cloudUrl, compositeId);
       db.prepare(`UPDATE sessions SET cloud_url = ? WHERE id = ?`).run(cloudUrl, sessionId);
     }
 
     res.json({
+      compositeId,
+      version: version.n + 1,
       finalCompositeUrl: `/storage/${finalPath}`,
       status: "Ready to Print",
       cloudUrl,
