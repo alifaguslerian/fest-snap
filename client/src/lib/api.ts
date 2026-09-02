@@ -89,15 +89,37 @@ export async function fetchTemplates(): Promise<TemplateData[]> {
   return body.templates;
 }
 
+/** Satu slot: foto mana yang dipasang (atau null kalau kosong) + seberapa
+ * digeser dari posisi tengah default (lihat lib/compositing.ts). */
+export interface SlotAssignment {
+  photoId: string | null;
+  offsetX: number;
+  offsetY: number;
+}
+
+/** Satu versi hasil akhir yang tersimpan. Satu sesi bisa punya BANYAK
+ * composite (tiap "Simpan hasil" = versi baru, gak menimpa yang lama) —
+ * lihat catatan di server/src/db/index.ts. */
+export interface Composite {
+  id: string;
+  version: number;
+  templateId: string;
+  slotAssignments: SlotAssignment[] | null;
+  url: string;
+  cloudUrl: string | null;
+  createdAt: number;
+}
+
 export interface SessionDetail {
   id: string;
   displayName: string;
   timestamp: string;
   status: string;
   templateId: string | null;
-  slotAssignments: (string | null)[] | null; // array of photo id per slot
+  slotAssignments: SlotAssignment[] | null;
   finalCompositeUrl: string | null;
   photos: { id: string; url: string }[];
+  composites: Composite[];
 }
 
 export async function fetchSessionDetail(sessionId: string): Promise<SessionDetail> {
@@ -110,8 +132,8 @@ export async function finalizeSession(
   sessionId: string,
   finalImageBlob: Blob,
   templateId: string,
-  slotAssignments: (string | null)[]
-): Promise<{ finalCompositeUrl: string }> {
+  slotAssignments: SlotAssignment[]
+): Promise<{ finalCompositeUrl: string; compositeId: string; version: number }> {
   const formData = new FormData();
   formData.append("finalImage", finalImageBlob, "final.jpg");
   formData.append("templateId", templateId);
