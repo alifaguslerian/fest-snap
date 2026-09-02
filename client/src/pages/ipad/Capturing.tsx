@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertCircle, Play } from 'lucide-react';
 
-const IDLE_TIMEOUT_MS = 45_000; // 45 detik, sama seperti InputName (FR-04)
+const IDLE_TIMEOUT_MS = 60_000; // 60 detik, sama seperti InputName (FR-04)
 
 export interface CapturingProps {
   onPhotoCaptured: (photoBlob: Blob) => void;
@@ -103,7 +103,18 @@ export const Capturing: React.FC<CapturingProps> = ({
         return;
       }
 
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      // Stream kamera depan yang dikasih getUserMedia itu SUDAH true-to-life
+      // secara data (bukan mirror) — tapi kalau digambar apa adanya ke
+      // canvas, hasilnya berlawanan arah dari yang orang harapkan waktu
+      // "menghadap kiri" secara fisik (karena kamera "melihat" orang itu
+      // dari depan, seperti orang lain yang berhadapan, bukan seperti kaca).
+      // Flip di sini membalik itu supaya hasil foto match sama arah hadap
+      // orangnya di dunia nyata (hadap kiri di dunia nyata -> hadap kiri
+      // juga di foto), bukan kebalik kayak biasanya foto selfie mirror.
+      ctx.save();
+      ctx.scale(-1, 1);
+      ctx.drawImage(video, -canvas.width, 0, canvas.width, canvas.height);
+      ctx.restore();
       canvas.toBlob((blob) => {
         if (!blob) {
           reject(new Error('Gagal mengonversi frame kamera menjadi gambar.'));
@@ -121,7 +132,7 @@ export const Capturing: React.FC<CapturingProps> = ({
 
     async function runSequence() {
       for (let i = 0; i < 5; i++) {
-        for (let c = 3; c >= 1; c--) {
+        for (let c = 5; c >= 1; c--) {
           if (cancelled) return;
           setCountdown(c);
           await sleep(1000);
@@ -181,7 +192,7 @@ export const Capturing: React.FC<CapturingProps> = ({
             autoPlay
             playsInline
             muted
-            className={`w-full h-full object-cover ${cameraError ? 'hidden' : 'block'}`}
+            className={`w-full h-full object-cover -scale-x-100 ${cameraError ? 'hidden' : 'block'}`}
           />
           <canvas ref={canvasRef} className="hidden" />
 
