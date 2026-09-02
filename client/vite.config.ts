@@ -5,8 +5,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 // Path ke certificate mkcert yang sama dipakai server (lihat server/src/index.ts
-// dan mkcert-setup-guide.md). Taruh dua file cert ini di folder /certs pada root project.
-const CERT_DIR = path.resolve(__dirname, "../certs");
+// dan mkcert-setup-guide.md). Taruh dua file cert ini di folder server/certs/.
+const CERT_DIR = path.resolve(__dirname, "../server/certs");
 const CERT_PATH = path.join(CERT_DIR, "localhost+2.pem");
 const KEY_PATH = path.join(CERT_DIR, "localhost+2-key.pem");
 
@@ -22,6 +22,14 @@ if (!hasCerts) {
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    // Build production keluar langsung ke server/client-dist — lokasi yang
+    // sama dipakai baik saat development (server baca dari sini kalau ada)
+    // maupun mode packaged/.exe (lihat server/src/lib/appRoot.ts). Jadi
+    // satu lokasi konsisten, gak perlu logic beda antara dua mode.
+    outDir: "../server/client-dist",
+    emptyOutDir: true,
+  },
   server: {
     https: hasCerts
       ? {
