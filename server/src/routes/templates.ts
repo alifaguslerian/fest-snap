@@ -1,10 +1,9 @@
 import { Router } from "express";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { APP_ROOT } from "../lib/appRoot.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const TEMPLATES_DIR = path.join(__dirname, "../templates");
+const TEMPLATES_DIR = path.join(APP_ROOT, "templates");
 
 export const templatesRouter = Router();
 
