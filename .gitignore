@@ -41,3 +41,32 @@ env.example
 *.log
 .DS_Store
 Thumbs.db
+
+node_modules/
+dist/
+server/certs/*.pem
+server/*.db
+server/*.db-wal
+server/*.db-shm
+
+# Foto hasil capture pengunjung — data runtime, bukan source code, dan
+# berisi foto asli orang (privasi). Jangan pernah ter-commit.
+server/storage/*
+!server/storage/.gitkeep
+
+# Hasil build client (dihasilkan ulang tiap kali dari source, gak perlu
+# ter-commit) dan hasil packaging .exe (biner besar, dihasilkan ulang tiap
+# butuh, bukan source code).
+server/client-dist/
+server/dist-bundle/
+FEST-SNAP-dist/
+
+# Slice 4 — kredensial cloud provider (Supabase). .env.example DIKECUALIKAN
+# (itu cuma template kosong, aman dan memang harus ter-commit).
+.env
+.env.*
+!.env.example
+
+*.log
+.DS_Store
+Thumbs.db
