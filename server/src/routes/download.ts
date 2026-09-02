@@ -11,16 +11,30 @@ const SERVER_PORT = 8443;
 interface SessionRow {
   display_name: string;
   created_at: number;
-  final_composite_path: string | null;
+}
+
+interface CompositeRow {
+  file_path: string;
   cloud_url: string | null;
 }
 
 function getSession(sessionId: string): SessionRow | undefined {
   return db
-    .prepare(
-      `SELECT display_name, created_at, final_composite_path, cloud_url FROM sessions WHERE id = ?`
-    )
+    .prepare(`SELECT display_name, created_at FROM sessions WHERE id = ?`)
     .get(sessionId) as SessionRow | undefined;
+}
+
+/** Composite TERAKHIR (versi tertinggi) buat sesi ini — QR/download SELALU
+ * merujuk ke hasil yang paling baru disimpan, bukan daftar semua versi.
+ * Versi-versi lama tetap ada di storage/DB (gak dihapus), cuma gak
+ * ditampilkan lewat QR lagi — kalau operator butuh versi lama, ambil
+ * manual lewat folder storage. */
+function getLatestComposite(sessionId: string): CompositeRow | undefined {
+  return db
+    .prepare(
+      `SELECT file_path, cloud_url FROM composites WHERE session_id = ? ORDER BY version DESC LIMIT 1`
+    )
+    .get(sessionId) as unknown as CompositeRow | undefined;
 }
 
 function formatTimestamp(epochMs: number): string {
@@ -30,30 +44,22 @@ function formatTimestamp(epochMs: number): string {
   return `${hh}:${mm}`;
 }
 
-/**
- * URL yang di-encode ke QR — cloud kalau ada (bisa diakses WiFi mana saja),
- * local kalau enggak (butuh jaringan yang sama). Lihat software-architecture.md
- * section 7 untuk penjelasan logic dinamis ini.
- */
-function resolveDownloadUrl(session: SessionRow, sessionId: string): string {
-  if (session.cloud_url) {
-    return session.cloud_url;
-  }
-  const ip = getLocalNetworkIp();
-  return `https://${ip}:${SERVER_PORT}/download/${sessionId}`;
-}
-
-// GET /api/sessions/:id/qr — QR code PNG untuk sesi ini
+// GET /api/sessions/:id/qr — QR code PNG menuju hasil TERAKHIR yang
+// disimpan. Kalau upload cloud-nya sukses, QR LANGSUNG encode link cloud
+// itu (skip halaman local sepenuhnya — sekali scan, langsung ke Supabase).
+// Kalau enggak (belum dikonfigurasi / gagal / timeout), QR arah ke halaman
+// download local, yang juga cuma nampilin hasil TERAKHIR itu doang.
 qrRouter.get("/sessions/:id/qr", async (req, res) => {
   const session = getSession(req.params.id);
   if (!session) {
     return res.status(404).json({ error: "Sesi tidak ditemukan." });
   }
-  if (!session.final_composite_path) {
+  const latest = getLatestComposite(req.params.id);
+  if (!latest) {
     return res.status(400).json({ error: "Sesi belum punya hasil akhir — simpan dulu sebelum generate QR." });
   }
 
-  const url = resolveDownloadUrl(session, req.params.id);
+  const url = latest.cloud_url ?? `https://${getLocalNetworkIp()}:${SERVER_PORT}/download/${req.params.id}`;
 
   try {
     const qrPngBuffer = await QRCode.toBuffer(url, { width: 400, margin: 2 });
@@ -65,19 +71,20 @@ qrRouter.get("/sessions/:id/qr", async (req, res) => {
   }
 });
 
-// GET /download/:id — halaman download standalone (dibuka HP pengunjung
-// setelah scan QR jalur local). Server-rendered langsung, TIDAK butuh Vite/
-// React app jalan — cukup server ini aktif di port 8443.
+// GET /download/:id — halaman download standalone, cuma dipakai kalau
+// jalur cloud gak tersedia buat hasil TERAKHIR (lihat komentar di atas).
+// Server-rendered langsung, TIDAK butuh Vite/React app jalan.
 downloadPageRouter.get("/download/:id", (req, res) => {
   const session = getSession(req.params.id);
+  const latest = session ? getLatestComposite(req.params.id) : undefined;
 
-  if (!session || !session.final_composite_path) {
+  if (!session || !latest) {
     res.status(404).send(renderNotFoundPage());
     return;
   }
 
-  const imageUrl = `/storage/${session.final_composite_path}`;
   const label = `${session.display_name}-${formatTimestamp(session.created_at)}`;
+  const imageUrl = latest.cloud_url ?? `/storage/${latest.file_path}`;
   res.send(renderDownloadPage(label, imageUrl));
 });
 
