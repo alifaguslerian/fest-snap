@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Printer, QrCode, Trash2, Check, Maximize2, X } from 'lucide-react';
+import { Printer, QrCode, Trash2, Check, Maximize2, X, RotateCcw } from 'lucide-react';
 import {
   fetchTemplates,
   fetchSessionDetail,
@@ -7,6 +7,7 @@ import {
   updateSessionStatus,
   type TemplateData,
   type SessionDetail,
+  type SlotAssignment,
 } from '../../lib/api';
 import { composeTemplate, canvasToBlob } from '../../lib/compositing';
 import { printCompositeImage } from '../../lib/print';
@@ -16,6 +17,11 @@ export interface EditingProps {
   onBackToQueue: () => void;
   onDeleteSession: () => void;
 }
+
+function makeEmptySlots(count: number): SlotAssignment[] {
+  return Array.from({ length: count }, () => ({ photoId: null, offsetX: 0, offsetY: 0 }));
+}
+
 
 /**
  * Visual layout diadaptasi dari eksplorasi AI Studio (dekorasi, kartu sticker,
@@ -32,7 +38,7 @@ export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDe
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [templates, setTemplates] = useState<TemplateData[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
-  const [slotPhotoIds, setSlotPhotoIds] = useState<(string | null)[]>([]);
+  const [slotAssignments, setSlotAssignments] = useState<SlotAssignment[]>([]);
   const [activeSlotIndex, setActiveSlotIndex] = useState<number | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -51,11 +57,11 @@ export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDe
           setSelectedTemplateId(sessionData.templateId);
           const tpl = templateList.find((t) => t.id === sessionData.templateId);
           if (tpl) {
-            setSlotPhotoIds(sessionData.slotAssignments ?? Array(tpl.slots.length).fill(null));
+            setSlotAssignments(sessionData.slotAssignments ?? makeEmptySlots(tpl.slots.length));
           }
         } else if (templateList.length > 0) {
           setSelectedTemplateId(templateList[0].id);
-          setSlotPhotoIds(Array(templateList[0].slots.length).fill(null));
+          setSlotAssignments(makeEmptySlots(templateList[0].slots.length));
         }
       })
       .catch((err) => {
@@ -68,19 +74,147 @@ export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDe
 
   const handleSelectTemplate = (tpl: TemplateData) => {
     setSelectedTemplateId(tpl.id);
-    setSlotPhotoIds(Array(tpl.slots.length).fill(null));
+    setSlotAssignments(makeEmptySlots(tpl.slots.length));
     setActiveSlotIndex(null);
     setSaveMessage(null);
   };
 
   const handleSelectPhoto = (photoId: string) => {
     if (activeSlotIndex === null) return;
-    setSlotPhotoIds((prev) => {
+    setSlotAssignments((prev) => {
       const next = [...prev];
-      next[activeSlotIndex] = photoId;
+      // Foto baru selalu mulai dari tengah (offset 0,0) — gak nurunin offset
+      // dari foto sebelumnya di slot ini, biar gak bingung.
+      next[activeSlotIndex] = { photoId, offsetX: 0, offsetY: 0 };
       return next;
     });
     setSaveMessage(null);
+  };
+
+  const handleResetOffset = () => {
+    if (activeSlotIndex === null) return;
+    setSlotAssignments((prev) => {
+      const current = prev[activeSlotIndex];
+      if (!current) return prev;
+      const next = [...prev];
+      next[activeSlotIndex] = { ...current, offsetX: 0, offsetY: 0 };
+      return next;
+    });
+    setSaveMessage(null);
+  };
+
+  /**
+   * Drag langsung di atas preview buat geser posisi foto dalam slotnya —
+   * gantiin tombol panah (kurang natural, harus klik berkali-kali). Model
+   * interaksinya "direct manipulation": foto seolah-olah ditarik pakai
+   * kursor, seperti drag foto di Instagram/Canva.
+   *
+   * mousedown di slot KOSONG -> langsung pilih slot itu jadi aktif (gak ada
+   * yang bisa di-drag di situ). mousedown di slot yang UDAH ADA FOTO ->
+   * nunggu dulu: kalau kursor gak banyak gerak sebelum dilepas, dianggap
+   * "klik biasa" (pilih slot jadi aktif, buat ganti foto lewat grid). Kalau
+   * gerak melewati DRAG_THRESHOLD_PX, dianggap drag (geser posisi foto).
+   */
+  const DRAG_THRESHOLD_PX = 4;
+
+  const dragStateRef = useRef<{
+    slotIndex: number;
+    startClientX: number;
+    startClientY: number;
+    startOffsetX: number;
+    startOffsetY: number;
+    moved: boolean;
+  } | null>(null);
+
+  const [isDragging, setIsDragging] = useState(false);
+
+  const canvasClientToSlotIndex = (clientX: number, clientY: number): number => {
+    const canvas = canvasRef.current;
+    if (!canvas || !selectedTemplate) return -1;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = (clientX - rect.left) * scaleX;
+    const y = (clientY - rect.top) * scaleY;
+    return selectedTemplate.slots.findIndex((s) => x >= s.x && x <= s.x + s.width && y >= s.y && y <= s.y + s.height);
+  };
+
+  const handleCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const idx = canvasClientToSlotIndex(e.clientX, e.clientY);
+    if (idx === -1) return;
+
+    const hasPhoto = Boolean(slotAssignments[idx]?.photoId);
+    if (!hasPhoto) {
+      // Slot kosong: gak ada yang bisa di-drag, langsung pilih aktif seperti biasa.
+      setActiveSlotIndex(idx);
+      return;
+    }
+
+    dragStateRef.current = {
+      slotIndex: idx,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      startOffsetX: slotAssignments[idx].offsetX,
+      startOffsetY: slotAssignments[idx].offsetY,
+      moved: false,
+    };
+    setIsDragging(true);
+
+    const canvas = canvasRef.current;
+    if (!canvas || !selectedTemplate) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const slot = selectedTemplate.slots[idx];
+
+    const handleWindowPointerMove = (ev: PointerEvent) => {
+      const drag = dragStateRef.current;
+      if (!drag) return;
+      const deltaClientX = ev.clientX - drag.startClientX;
+      const deltaClientY = ev.clientY - drag.startClientY;
+
+      if (!drag.moved && Math.hypot(deltaClientX, deltaClientY) > DRAG_THRESHOLD_PX) {
+        drag.moved = true;
+      }
+      if (!drag.moved) return;
+
+      // Konversi delta dari koordinat layar (CSS px) ke koordinat internal
+      // canvas, lalu ke perubahan offset (-1..1) relatif lebar/tinggi slot.
+      // Drag ke kiri/atas -> menampakkan bagian foto yang tadinya
+      // tersembunyi di kanan/bawah -> offset bertambah (lihat penjelasan
+      // arah di lib/compositing.ts).
+      const deltaCanvasX = deltaClientX * scaleX;
+      const deltaCanvasY = deltaClientY * scaleY;
+      const newOffsetX = drag.startOffsetX - (deltaCanvasX / slot.width) * 2;
+      const newOffsetY = drag.startOffsetY - (deltaCanvasY / slot.height) * 2;
+
+      setSlotAssignments((prev) => {
+        const current = prev[drag.slotIndex];
+        if (!current) return prev;
+        const next = [...prev];
+        next[drag.slotIndex] = {
+          ...current,
+          offsetX: Math.max(-1, Math.min(1, newOffsetX)),
+          offsetY: Math.max(-1, Math.min(1, newOffsetY)),
+        };
+        return next;
+      });
+    };
+
+    const handleWindowPointerUp = () => {
+      const drag = dragStateRef.current;
+      window.removeEventListener('pointermove', handleWindowPointerMove);
+      window.removeEventListener('pointerup', handleWindowPointerUp);
+      setIsDragging(false);
+      dragStateRef.current = null;
+      if (drag && !drag.moved) {
+        // Gak kegeser sama sekali -> ini klik biasa, bukan drag.
+        setActiveSlotIndex(drag.slotIndex);
+      }
+    };
+
+    window.addEventListener('pointermove', handleWindowPointerMove);
+    window.addEventListener('pointerup', handleWindowPointerUp);
   };
 
   const photoIdToUrl = useCallback(
@@ -90,28 +224,18 @@ export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDe
 
   useEffect(() => {
     if (!selectedTemplate || !canvasRef.current) return;
-    const slotPhotoUrls = slotPhotoIds.map(photoIdToUrl);
-    composeTemplate({ canvas: canvasRef.current, template: selectedTemplate, slotPhotoUrls }).catch((err) =>
+    const slotPlacements = slotAssignments.map((a) => {
+      const url = photoIdToUrl(a.photoId);
+      if (!url) return undefined;
+      return { photoUrl: url, offsetX: a.offsetX, offsetY: a.offsetY };
+    });
+    composeTemplate({ canvas: canvasRef.current, template: selectedTemplate, slotPlacements }).catch((err) =>
       console.error('Gagal render preview:', err)
     );
-  }, [selectedTemplate, slotPhotoIds, photoIdToUrl]);
+  }, [selectedTemplate, slotAssignments, photoIdToUrl]);
 
-  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas || !selectedTemplate) return;
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const clickX = (e.clientX - rect.left) * scaleX;
-    const clickY = (e.clientY - rect.top) * scaleY;
-    const idx = selectedTemplate.slots.findIndex(
-      (s) => clickX >= s.x && clickX <= s.x + s.width && clickY >= s.y && clickY <= s.y + s.height
-    );
-    if (idx !== -1) setActiveSlotIndex(idx);
-  };
-
-  const filledCount = slotPhotoIds.filter((id) => id !== null).length;
-  const allSlotsFilled = slotPhotoIds.length > 0 && filledCount === slotPhotoIds.length;
+  const filledCount = slotAssignments.filter((a) => a.photoId !== null).length;
+  const allSlotsFilled = slotAssignments.length > 0 && filledCount === slotAssignments.length;
 
   const handleSave = async () => {
     if (!canvasRef.current || !selectedTemplateId || !allSlotsFilled) return;
@@ -119,21 +243,13 @@ export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDe
     setSaveMessage(null);
     try {
       const blob = await canvasToBlob(canvasRef.current);
-      const result = await finalizeSession(sessionId, blob, selectedTemplateId, slotPhotoIds);
-      setSaveMessage('Tersimpan — siap dicetak.');
-      // Bug fix: sebelumnya state session lokal gak pernah di-update setelah
-      // simpan, jadi tombol Cetak gak tau ada hasil baru tanpa reload manual.
-      setSession((prev) =>
-        prev
-          ? {
-              ...prev,
-              templateId: selectedTemplateId,
-              slotAssignments: slotPhotoIds,
-              finalCompositeUrl: result.finalCompositeUrl,
-              status: 'Siap Cetak',
-            }
-          : prev
-      );
+      await finalizeSession(sessionId, blob, selectedTemplateId, slotAssignments);
+      setSaveMessage('Tersimpan sebagai versi baru — siap dicetak/diunduh.');
+      // Refetch (bukan patch manual sebagian) — supaya daftar composites
+      // (semua versi hasil akhir) ke-update lengkap dan konsisten sama yang
+      // beneran ada di server, bukan cuma nebak-nebak bentuknya di client.
+      const refreshed = await fetchSessionDetail(sessionId);
+      setSession(refreshed);
     } catch (err) {
       console.error('Gagal menyimpan hasil akhir:', err);
       setSaveMessage('Gagal menyimpan. Coba lagi.');
@@ -142,12 +258,12 @@ export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDe
     }
   };
 
-  // Ada perubahan yang belum disimpan? (template/slot beda dari yang tersimpan
-  // terakhir) — dipakai buat kasih hint sebelum cetak versi lama.
+  // Ada perubahan yang belum disimpan? (template/slot/offset beda dari yang
+  // tersimpan terakhir) — dipakai buat kasih hint sebelum cetak versi lama.
   const hasUnsavedChanges =
     session != null &&
     (session.templateId !== selectedTemplateId ||
-      JSON.stringify(session.slotAssignments) !== JSON.stringify(slotPhotoIds));
+      JSON.stringify(session.slotAssignments) !== JSON.stringify(slotAssignments));
 
   const handlePrint = async () => {
     if (!session?.finalCompositeUrl || !session.templateId) return;
@@ -260,7 +376,7 @@ export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDe
                 Foto Kamu
               </h2>
               <span className="bg-[#f0eee6] border border-[#8d716a] text-[#59413c] font-bold text-xs px-3 py-1 rounded-md">
-                {filledCount}/{slotPhotoIds.length || 0} Slot Terisi
+                {filledCount}/{slotAssignments.length || 0} Slot Terisi
               </span>
             </div>
             {activeSlotIndex !== null && (
@@ -271,7 +387,7 @@ export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDe
 
             <div className="grid grid-cols-3 gap-2">
               {session.photos.map((photo) => {
-                const usedInSlot = slotPhotoIds.includes(photo.id);
+                const usedInSlot = slotAssignments.some((a) => a.photoId === photo.id);
                 return (
                   <button
                     key={photo.id}
@@ -303,11 +419,28 @@ export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDe
               </button>
               <canvas
                 ref={canvasRef}
-                onClick={handleCanvasClick}
-                className="max-w-full cursor-pointer"
-                style={{ maxHeight: '42vh' }}
+                onPointerDown={handleCanvasPointerDown}
+                className={`max-w-full ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+                style={{ maxHeight: '42vh', touchAction: 'none' }}
               />
             </div>
+
+            {activeSlotIndex !== null && slotAssignments[activeSlotIndex]?.photoId && (
+              <div className="flex items-center gap-2 text-xs">
+                <p className="font-semibold text-[#2F4FE8]">
+                  Tips: klik-tahan lalu geser foto langsung di preview buat atur posisinya
+                </p>
+                {(slotAssignments[activeSlotIndex].offsetX !== 0 || slotAssignments[activeSlotIndex].offsetY !== 0) && (
+                  <button
+                    onClick={handleResetOffset}
+                    className="flex items-center gap-1 text-[#2F4FE8] font-bold underline cursor-pointer shrink-0"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    Reset
+                  </button>
+                )}
+              </div>
+            )}
 
             <button
               onClick={handleSave}
