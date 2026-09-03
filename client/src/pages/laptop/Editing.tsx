@@ -259,11 +259,37 @@ export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDe
   };
 
   // Ada perubahan yang belum disimpan? (template/slot/offset beda dari yang
-  // tersimpan terakhir) — dipakai buat kasih hint sebelum cetak versi lama.
+  // tersimpan terakhir) — dipakai buat kasih hint sebelum cetak versi lama,
+  // dan buat peringatan sebelum keluar tanpa sengaja (lihat effect di bawah).
   const hasUnsavedChanges =
     session != null &&
     (session.templateId !== selectedTemplateId ||
       JSON.stringify(session.slotAssignments) !== JSON.stringify(slotAssignments));
+
+  // Peringatan browser bawaan kalau operator nutup tab/refresh/pindah URL
+  // pas ada perubahan belum disimpan. CATATAN: ini CUMA nangkep aksi level
+  // browser (refresh, tutup tab, ketik URL baru) — klik tombol "Kembali ke
+  // Queue" di dalam app itu navigasi internal (bukan reload beneran), jadi
+  // ditangani terpisah lewat handleBackToQueue di bawah.
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!hasUnsavedChanges) return;
+      e.preventDefault();
+      // Teks di sini gak dipakai browser modern (mereka nampilin pesan
+      // bawaan sendiri demi keamanan) — cuma perlu di-set biar dialognya
+      // beneran muncul.
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [hasUnsavedChanges]);
+
+  const handleBackToQueue = () => {
+    if (hasUnsavedChanges && !window.confirm('Ada perubahan belum disimpan. Yakin mau kembali ke Queue?')) {
+      return;
+    }
+    onBackToQueue();
+  };
 
   const handlePrint = async () => {
     if (!session?.finalCompositeUrl || !session.templateId) return;
@@ -352,7 +378,7 @@ export const Editing: React.FC<EditingProps> = ({ sessionId, onBackToQueue, onDe
         </div>
         <div className="flex items-center gap-6">
           <button
-            onClick={onBackToQueue}
+            onClick={handleBackToQueue}
             className="font-bold text-sm text-[#2F4FE8] underline decoration-2 underline-offset-4 cursor-pointer"
           >
             Kembali ke queue
