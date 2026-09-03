@@ -41,14 +41,22 @@ export const Queue: React.FC<QueueProps> = ({ onOpenSession, onDeleteAll }) => {
   }, []);
 
   const handleDeleteAll = () => {
-    if (window.confirm('Apakah Anda yakin ingin menghapus semua data antrian sesi?')) {
-      deleteAllSessions()
-        .then(() => {
-          setSessions([]);
-          onDeleteAll();
-        })
-        .catch((err) => console.error('Gagal menghapus semua data:', err));
+    const confirmation = window.prompt(
+      'Ini akan menghapus SEMUA data sesi (foto, hasil edit, semuanya) ' +
+        'secara PERMANEN dan gak bisa dibatalin.\n\n' +
+        'Ketik persis "HAPUS SEMUA" (huruf besar semua) untuk konfirmasi:'
+    );
+    if (confirmation === null) return; // batal (klik Cancel di dialog)
+    if (confirmation.trim() !== 'HAPUS SEMUA') {
+      window.alert('Teks konfirmasi gak cocok — dibatalkan, gak ada data yang dihapus.');
+      return;
     }
+    deleteAllSessions()
+      .then(() => {
+        setSessions([]);
+        onDeleteAll();
+      })
+      .catch((err) => console.error('Gagal menghapus semua data:', err));
   };
 
   const getActionButtonLabel = (status: SessionStatus): string => {
